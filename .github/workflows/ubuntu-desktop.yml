@@ -16,17 +16,28 @@ jobs:
           debug-on-error: true
           run: |
             export DEBIAN_FRONTEND=noninteractive
+            echo "🔧 تثبيت سطح المكتب + المحرك الرسومي..."
             apt-get update -qq
-            apt-get install -y -qq xfce4 xfce4-terminal lightdm
+            apt-get install -y -qq xfce4 xfce4-terminal xorg lightdm lightdm-gtk-greeter
 
-            # تفعيل كلمة سر للمستخدم الرسمي ubuntu (أمر Ubuntu الرسمي للصور السحابية)
+            echo "🔑 تفعيل كلمة سر للمستخدم الرسمي ubuntu..."
             echo "ubuntu:ubuntu" | chpasswd
 
-            # دخول تلقائي بمفاتيح LightDM الرسمية
+            echo "🖥️ إعداد LightDM (شاشة tty1 + دخول تلقائي)..."
             mkdir -p /etc/lightdm/lightdm.conf.d
-            printf '[Seat:*]\nautologin-user=ubuntu\nautologin-user-timeout=0\n' > /etc/lightdm/lightdm.conf.d/99-autologin.conf
+            printf '[LightDM]\nminimum-vt=1\n[Seat:*]\nautologin-user=ubuntu\nautologin-user-timeout=0\n' > /etc/lightdm/lightdm.conf.d/99-autologin.conf
 
-            systemctl start lightdm
+            echo "🚀 التبديل للوضع الرسومي..."
+            systemctl isolate graphical.target
             sleep 10
-            echo "🎉 افتح رابط WebVNC — دخول تلقائي بالمستخدم الرسمي ubuntu"
+
+            echo "🩺 تشخيص:"
+            pgrep -a Xorg || echo "❌ Xorg ما يشتغل"
+            systemctl is-active lightdm
+
+            echo ""
+            echo "###########################################"
+            echo "🎉 افتح رابط WebVNC من فوق"
+            echo "لو سألك: ubuntu / ubuntu"
+            echo "###########################################"
             exit 1
