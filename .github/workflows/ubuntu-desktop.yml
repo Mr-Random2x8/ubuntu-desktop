@@ -16,25 +16,17 @@ jobs:
           debug-on-error: true
           run: |
             export DEBIAN_FRONTEND=noninteractive
-            echo "🔧 تثبيت سطح المكتب XFCE..."
             apt-get update -qq
-            apt-get install -y -qq xfce4 xfce4-terminal lightdm dbus-x11
+            apt-get install -y -qq xfce4 xfce4-terminal lightdm
 
-            echo "👤 إنشاء مستخدم + دخول تلقائي..."
-            useradd -m -s /bin/bash user
-            echo "user:ubuntu" | chpasswd
+            # تفعيل كلمة سر للمستخدم الرسمي ubuntu (أمر Ubuntu الرسمي للصور السحابية)
+            echo "ubuntu:ubuntu" | chpasswd
+
+            # دخول تلقائي بمفاتيح LightDM الرسمية
             mkdir -p /etc/lightdm/lightdm.conf.d
-            printf "[Seat:*]\nautologin-user=user\n" > /etc/lightdm/lightdm.conf.d/99-autologin.conf
-            echo "/usr/sbin/lightdm" > /etc/X11/default-display-manager
+            printf '[Seat:*]\nautologin-user=ubuntu\nautologin-user-timeout=0\n' > /etc/lightdm/lightdm.conf.d/99-autologin.conf
 
-            echo "🚀 تشغيل الواجهة الرسومية..."
-            systemctl start lightdm || service lightdm start
-            sleep 8
-
-            echo ""
-            echo "###########################################"
-            echo "🎉 سطح مكتب أوبنتو جاهز!"
-            echo "افتح رابط WebVNC (Cloudflare) من الـ logs فوق"
-            echo "بيدخل تلقائياً بدون كلمة سر"
-            echo "###########################################"
+            systemctl start lightdm
+            sleep 10
+            echo "🎉 افتح رابط WebVNC — دخول تلقائي بالمستخدم الرسمي ubuntu"
             exit 1
