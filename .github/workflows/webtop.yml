@@ -9,31 +9,50 @@ jobs:
     steps:
       - name: Boot official Ubuntu Live ISO in QEMU
         run: |
+          echo "🔓 تفعيل KVM..."
+          sudo chmod 666 /dev/kvm || echo "KVM غير متاح، سيستخدم TCG"
+
           echo "📥 تنزيل ISO أوبنتو الرسمي..."
           sudo apt-get update -qq
           sudo apt-get install -y -qq qemu-system-x86 novnc websockify
-          ISO=$(curl -s https://releases.ubuntu.com/24.04/ | grep -oE 'ubuntu-24\.04(\.[0-9]+)?-desktop-amd64\.iso' | head -1)
-          curl -Lo ubuntu.iso "https://releases.ubuntu.com/24.04/$ISO"
 
-          echo "🖥️ إقلاع VM حقيقي (KVM)..."
-          qemu-system-x86_64 -enable-kvm -m 6144 -smp 4 \
+          ISO_URL="https://releases.ubuntu.com/22.04/ubuntu-22.04.5-desktop-amd64.iso"
+          curl -Lo ubuntu.iso "$ISO_URL"
+
+          echo "🖥️ إقلاع VM حقيقي..."
+          # KVM أولوية، TCG احتياطي رسمي
+          sudo qemu-system-x86_64 -enable-kvm -m 6144 -smp 4 \
             -cdrom ubuntu.iso -boot order=d \
             -device virtio-net-pci,netdev=n0 -netdev user,id=n0 \
             -vga virtio -display none -vnc :0 &
-          sleep 5
+          QPID=$!
+          sleep 10
 
-          echo "🌐 noVNC (واجهة ويب رسمية)..."
+          # إذا KVM فشل، نستخدم TCG (محاكاة برمجية رسمية من QEMU)
+          if ! kill -0 $QPID 2>/dev/null; then
+            echo "⚠️ KVM فشل — استخدام TCG (رسمي من QEMU)..."
+            sudo qemu-system-x86_64 -accel tcg -m 4096 -smp 2 \
+              -cdrom ubuntu.iso -boot order=d \
+              -device virtio-net-pci,netdev=n0 -netdev user,id=n0 \
+              -vga std -display none -vnc :0 &
+            sleep 10
+          fi
+
+          echo "🌐 noVNC..."
           /usr/share/novnc/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           sleep 5
 
-          echo "🔗 نفق Cloudflare الرسمي..."
+          echo "🔗 نفق Cloudflare..."
           curl -Lo cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
           chmod +x cloudflared
           ./cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           sleep 15
           LINK=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' tunnel.log | head -1)
+
+          echo ""
           echo "###########################################"
           echo "🎉 افتح بالمتصفح:"
-          echo "$LINK/vnc.html?autoconnect=true"
+          echo "$LINK/vnc.html?autoconnect=true&resize=scale"
+          echo "انتظر 1-2 دقيقة لإقلاع Ubuntu الحقيقي"
           echo "###########################################"
           for i in $(seq 1 330); do sleep 60; done
