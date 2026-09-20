@@ -1,0 +1,40 @@
+name: Ubuntu Desktop VM
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ubuntu_desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Ubuntu VM with GUI
+        uses: vmactions/ubuntu-vm@v1
+        with:
+          mem: 8192
+          debug-on-error: true
+          run: |
+            export DEBIAN_FRONTEND=noninteractive
+            echo "🔧 تثبيت سطح المكتب XFCE..."
+            apt-get update -qq
+            apt-get install -y -qq xfce4 xfce4-terminal lightdm dbus-x11
+
+            echo "👤 إنشاء مستخدم + دخول تلقائي..."
+            useradd -m -s /bin/bash user
+            echo "user:ubuntu" | chpasswd
+            mkdir -p /etc/lightdm/lightdm.conf.d
+            printf "[Seat:*]\nautologin-user=user\n" > /etc/lightdm/lightdm.conf.d/99-autologin.conf
+            echo "/usr/sbin/lightdm" > /etc/X11/default-display-manager
+
+            echo "🚀 تشغيل الواجهة الرسومية..."
+            systemctl start lightdm || service lightdm start
+            sleep 8
+
+            echo ""
+            echo "###########################################"
+            echo "🎉 سطح مكتب أوبنتو جاهز!"
+            echo "افتح رابط WebVNC (Cloudflare) من الـ logs فوق"
+            echo "بيدخل تلقائياً بدون كلمة سر"
+            echo "###########################################"
+            exit 1
