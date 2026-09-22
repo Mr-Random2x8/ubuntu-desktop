@@ -13,7 +13,7 @@ jobs:
         uses: vmactions/debian-vm@v1
         with:
           mem: 4096
-          cpus: 4
+          cpu: 4
           debug-on-error: true
           run: |
             echo "🔧 تثبيت الأساسيات + واجهة Openbox الخفيفة..."
@@ -38,7 +38,7 @@ jobs:
             echo 'root:debian' | chpasswd
             /usr/sbin/sshd
 
-            echo "️ إعداد LightDM للدخول التلقائي..."
+            echo "🖥️ إعداد LightDM للدخول التلقائي..."
             mkdir -p /etc/lightdm/lightdm.conf.d
             printf '[Seat:*]\nautologin-user=root\nautologin-user-timeout=0\n' > /etc/lightdm/lightdm.conf.d/99-autologin.conf
 
@@ -46,7 +46,11 @@ jobs:
             lightdm &
             sleep 8
 
-            echo "📡 تشغيل x11vnc (لمشاركة الشاشة)..."
+            echo "📡 تشغيل x11vnc..."
             x11vnc -display :0 -nopw -listen 0.0.0.0 -forever &
             sleep 3
+
+            echo "🌐 فتح نفق Pinggy للـ SSH..."
+            ssh -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R0:localhost:22 tcp@free.pinggy.io
+
             exit 1
