@@ -1,31 +1,39 @@
-name: Ubuntu Web Desktop
+name: Debian Headless VM
 
 on:
   workflow_dispatch:
 
 jobs:
-  desktop:
+  debian:
     runs-on: ubuntu-latest
     steps:
-      - name: Start Ubuntu desktop in browser
-        run: |
-          echo "🚀 تشغيل سطح مكتب Ubuntu (صورة WebTop الرسمية)..."
-          docker run -d --name webtop --shm-size="1gb" \
-            -e PUID=1000 -e PGID=1000 \
-            -p 3000:3000 \
-            lscr.io/linuxserver/webtop:ubuntu-xfce
+      - uses: actions/checkout@v4
 
-          echo "🔗 إنشاء رابط عبر Cloudflare الرسمي..."
-          curl -Lo cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
-          chmod +x cloudflared
-          ./cloudflared tunnel --url http://localhost:3000 > tunnel.log 2>&1 &
-          sleep 15
+      - name: Run Debian VM
+        uses: vmactions/debian-vm@v1
+        with:
+          mem: 4096
+          debug-on-error: true
+          run: |
+            echo "🔧 تثبيت SSH..."
+            apt-get update -qq
+            apt-get install -y -qq openssh-server nano curl
 
-          LINK=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' tunnel.log | head -1)
-          echo ""
-          echo "###########################################"
-          echo "🎉 افتح هذا الرابط في متصفحك:"
-          echo "$LINK"
-          echo "###########################################"
+            echo "🔑 إعداد مفتاح SSH..."
+            mkdir -p /root/.ssh
+            chmod 700 /root/.ssh
+            echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKabR0ItQG3t0UFr9gk0QlL3OzkAtrfgNLkWJ9y4CWZk youssefhidour@youssefhidour-hpprobook640g1" > /root/.ssh/authorized_keys
+            chmod 600 /root/.ssh/authorized_keys
 
-          for i in $(seq 1 330); do sleep 60; done
+            echo "⚙️ تفعيل root login..."
+            echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config
+            echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config
+            echo 'root:debian' | chpasswd
+
+            echo "🚀 تشغيل SSH..."
+            /usr/sbin/sshd
+
+            echo "🌐 فتح نفق Pinggy..."
+            ssh -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R0:localhost:22 tcp@free.pinggy.io
+
+            exit 1
