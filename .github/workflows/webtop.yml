@@ -19,10 +19,8 @@ jobs:
               set -e
               export DEBIAN_FRONTEND=noninteractive
               
-              echo " تحديث قوائم الحزم..."
+              echo "⏳ جاري تثبيت الحزم (قد يستغرق 2-3 دقائق)..."
               apt-get update -qq
-              
-              echo " تثبيت الحزم (قد يستغرق 2-3 دقائق)..."
               apt-get install -y \
                 openssh-server xorg openbox \
                 tint2 pcmanfm lxterminal lxappearance nitrogen picom \
@@ -38,35 +36,40 @@ jobs:
               echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
               echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config
               echo "root:debian" | chpasswd
-              /usr/sbin/sshd || { echo "فشل تشغيل SSH"; exit 1; }
+              /usr/sbin/sshd
               
               echo "🖥️ تشغيل Xvfb و Openbox..."
               Xvfb :1 -screen 0 1280x720x24 &
-              sleep 5
+              sleep 3
               export DISPLAY=:1
               openbox &
               tint2 &
-              sleep 5
+              sleep 3
               
               echo "📡 تشغيل VNC و noVNC..."
               x11vnc -display :1 -nopw -listen 0.0.0.0 -forever &
-              sleep 3
+              sleep 2
               websockify --web=/usr/share/novnc 6080 localhost:5900 &
-              sleep 3
+              sleep 2
               
               echo "✅ كل الخدمات شغالة!"
               tail -f /dev/null
             '
 
-          echo "⏳ انتظار 20 ثانية لبدء الخدمات..."
-          sleep 20
+          echo "⏳ انتظار 120 ثانية لانتهاء التثبيت وتشغيل الخدمات..."
+          sleep 120
 
-          echo "📋 تشخيص الحاوية:"
+          echo "📋 التحقق من حالة الحاوية والمنافذ:"
           docker ps -a | grep debian-gui || echo "❌ الحاوية توقفت!"
-          echo "--- آخر 20 سطر من السجلات ---"
-          docker logs debian-gui 2>&1 | tail -n 20
+          
+          # التحقق من أن المنفذ 6080 يعمل داخل الحاوية
+          if docker exec debian-gui netstat -tuln | grep -q ":6080"; then
+            echo "✅ المنفذ 6080 يعمل بنجاح!"
+          else
+            echo "⚠️ تحذير: المنفذ 6080 لم يبدأ بعد. قد تحتاج لزيادة وقت الانتظار."
+          fi
 
-          echo " إنشاء نفق Cloudflare للواجهة..."
+          echo "🌐 إنشاء نفق Cloudflare للواجهة..."
           curl -sLo cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
           chmod +x cloudflared
           ./cloudflared tunnel --url http://localhost:6080 > web.log 2>&1 &
@@ -80,7 +83,7 @@ jobs:
 
           echo ""
           echo "###########################################"
-          echo "🖥️ الواجهة الرسومية:"
+          echo "🖥️ الواجهة الرسومية (انسخ هذا الرابط):"
           echo "$WEB_LINK/vnc.html?autoconnect=true"
           echo ""
           echo "🔐 SSH:"
@@ -88,4 +91,5 @@ jobs:
           echo "كلمة السر: debian"
           echo "###########################################"
 
+          # إبقاء الـ Job حياً لمدة 6 ساعات
           for i in $(seq 1 360); do sleep 60; done
