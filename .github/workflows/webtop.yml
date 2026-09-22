@@ -9,26 +9,25 @@ jobs:
     steps:
       - name: Start Debian with Openbox + SSH + noVNC
         run: |
-          echo "🚀 تشغيل حاوية Debian مع واجهة رسومية..."
+          echo "🚀 تشغيل حاوية Debian..."
           
-          docker run -d --name debian-gui --privileged \
+          docker run -d --name debian-gui \
             --shm-size="2g" \
             -p 2222:22 \
             -p 6080:6080 \
             debian:bookworm-slim bash -c '
-              set -e
               export DEBIAN_FRONTEND=noninteractive
               
-              echo "⏳ جاري تثبيت الحزم (قد يستغرق 2-3 دقائق)..."
+              echo "⏳ تثبيت الحزم (قد يستغرق 3-4 دقائق)..."
               apt-get update -qq
               apt-get install -y \
-                openssh-server xorg openbox \
+                openssh-server xvfb openbox \
                 tint2 pcmanfm lxterminal lxappearance nitrogen picom \
                 x11vnc novnc websockify nano curl wget git build-essential \
-                fonts-dejavu-core dbus-x11 x11-xserver-utils \
-                || { echo "فشل التثبيت!"; exit 1; }
+                fonts-dejavu-core dbus-x11 x11-xserver-utils procps net-tools
               
               echo "🔐 إعداد SSH..."
+              mkdir -p /run/sshd
               mkdir -p /root/.ssh && chmod 700 /root/.ssh
               echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKabR0ItQG3t0UFr9gk0QlL3OzkAtrfgNLkWJ9y4CWZk youssefhidour@youssefhidour-hpprobook640g1" > /root/.ssh/authorized_keys
               chmod 600 /root/.ssh/authorized_keys
@@ -36,38 +35,53 @@ jobs:
               echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
               echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config
               echo "root:debian" | chpasswd
-              /usr/sbin/sshd
               
-              echo "🖥️ تشغيل Xvfb و Openbox..."
+              /usr/sbin/sshd || echo "⚠️ فشل تشغيل sshd"
+              
+              echo "🖥️ تشغيل Xvfb..."
               Xvfb :1 -screen 0 1280x720x24 &
-              sleep 3
+              sleep 5
               export DISPLAY=:1
-              openbox &
-              tint2 &
+              
+              echo "🎨 تشغيل Openbox و tint2..."
+              openbox-session > /tmp/openbox.log 2>&1 &
+              sleep 2
+              tint2 > /tmp/tint2.log 2>&1 &
+              sleep 2
+              
+              echo "📡 تشغيل x11vnc..."
+              x11vnc -display :1 -nopw -listen 0.0.0.0 -forever -rfbport 5900 > /tmp/x11vnc.log 2>&1 &
               sleep 3
               
-              echo "📡 تشغيل VNC و noVNC..."
-              x11vnc -display :1 -nopw -listen 0.0.0.0 -forever &
-              sleep 2
-              websockify --web=/usr/share/novnc 6080 localhost:5900 &
-              sleep 2
+              echo "🌐 تشغيل websockify..."
+              websockify --web=/usr/share/novnc 6080 localhost:5900 > /tmp/websockify.log 2>&1 &
+              sleep 3
               
-              echo "✅ كل الخدمات شغالة!"
-              tail -f /dev/null
+              echo "✅ تم التشغيل! انتظار الاتصالات..."
+              while true; do sleep 60; done
             '
 
-          echo "⏳ انتظار 120 ثانية لانتهاء التثبيت وتشغيل الخدمات..."
-          sleep 210
+          echo "⏳ انتظار ذكي حتى تبدأ الخدمات..."
+          for i in {1..60}; do
+            if docker exec debian-gui netstat -tuln 2>/dev/null | grep -q ":6080"; then
+              echo "✅ المنفذ 6080 جاهز بعد $((i*5)) ثانية!"
+              break
+            fi
+            echo "⏳ محاولة $i/60 — انتظار 5 ثوانٍ..."
+            sleep 5
+          done
 
-          echo "📋 التحقق من حالة الحاوية والمنافذ:"
-          docker ps -a | grep debian-gui || echo "❌ الحاوية توقفت!"
-          
-          # التحقق من أن المنفذ 6080 يعمل داخل الحاوية
-          if docker exec debian-gui netstat -tuln | grep -q ":6080"; then
-            echo "✅ المنفذ 6080 يعمل بنجاح!"
-          else
-            echo "⚠️ تحذير: المنفذ 6080 لم يبدأ بعد. قد تحتاج لزيادة وقت الانتظار."
-          fi
+          echo "📋 تشخيص مفصل:"
+          docker ps -a | grep debian-gui
+          echo "--- حالة الحاوية ---"
+          docker inspect debian-gui --format '{{.State.Status}} - Exit Code: {{.State.ExitCode}}'
+          echo "--- آخر 30 سطر من السجلات ---"
+          docker logs debian-gui 2>&1 | tail -n 30
+          echo "--- حالة المنافذ داخل الحاوية ---"
+          docker exec debian-gui netstat -tuln 2>/dev/null || echo "netstat فشل"
+          echo "--- ملفات السجلات الداخلية ---"
+          docker exec debian-gui cat /tmp/x11vnc.log 2>/dev/null | tail -n 5
+          docker exec debian-gui cat /tmp/websockify.log 2>/dev/null | tail -n 5
 
           echo "🌐 إنشاء نفق Cloudflare للواجهة..."
           curl -sLo cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
@@ -76,14 +90,14 @@ jobs:
           sleep 10
           WEB_LINK=$(grep -oE "https://[a-z0-9-]+\.trycloudflare\.com" web.log | head -1)
 
-          echo "🔗 إنشاء نفق Cloudflare للـ SSH..."
+          echo "🔗 إنشاء نفق SSH..."
           ./cloudflared tunnel --url tcp://localhost:2222 > ssh.log 2>&1 &
           sleep 10
           SSH_LINK=$(grep -oE "tcp://[a-z0-9-]+\.trycloudflare\.com:[0-9]+" ssh.log | head -1)
 
           echo ""
           echo "###########################################"
-          echo "🖥️ الواجهة الرسومية (انسخ هذا الرابط):"
+          echo "🖥️ الواجهة الرسومية:"
           echo "$WEB_LINK/vnc.html?autoconnect=true"
           echo ""
           echo "🔐 SSH:"
@@ -91,5 +105,4 @@ jobs:
           echo "كلمة السر: debian"
           echo "###########################################"
 
-          # إبقاء الـ Job حياً لمدة 6 ساعات
           for i in $(seq 1 360); do sleep 60; done
