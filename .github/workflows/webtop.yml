@@ -1,39 +1,38 @@
-name: Debian Headless VM
+name: Debian Raw + SSH
 
 on:
   workflow_dispatch:
 
 jobs:
-  debian:
+  debian_raw:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Debian VM
+      - name: Run Debian VM (No GUI)
         uses: vmactions/debian-vm@v1
         with:
           mem: 4096
+          cpus: 4
           debug-on-error: true
           run: |
-            echo "🔧 تثبيت SSH..."
+            echo "🔧 تثبيت الأساسيات فقط..."
             apt-get update -qq
-            apt-get install -y -qq openssh-server nano curl
+            apt-get install -y -qq openssh-server nano curl wget git build-essential
 
-            echo "🔑 إعداد مفتاح SSH..."
+            echo "🔑 زرع مفتاح SSH الخاص بك..."
             mkdir -p /root/.ssh
             chmod 700 /root/.ssh
             echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKabR0ItQG3t0UFr9gk0QlL3OzkAtrfgNLkWJ9y4CWZk youssefhidour@youssefhidour-hpprobook640g1" > /root/.ssh/authorized_keys
             chmod 600 /root/.ssh/authorized_keys
 
-            echo "⚙️ تفعيل root login..."
+            echo "⚙️ تفعيل SSH..."
             echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config
             echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config
             echo 'root:debian' | chpasswd
-
-            echo "🚀 تشغيل SSH..."
             /usr/sbin/sshd
 
-            echo "🌐 فتح نفق Pinggy..."
+            echo " فتح نفق Pinggy..."
             ssh -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R0:localhost:22 tcp@free.pinggy.io
 
             exit 1
