@@ -16,15 +16,14 @@ jobs:
           cpu: 4
           debug-on-error: true
           run: |
-            echo "🔧 تثبيت الأساسيات + واجهة Openbox الخفيفة..."
+            echo "🔧 تثبيت الأساسيات + واجهة Openbox..."
             apt-get update -qq
             apt-get install -y -qq \
               openssh-server nano curl wget git build-essential \
               xorg openbox openbox-themes obconf obmenu \
               tint2 pcmanfm lxterminal lxappearance nitrogen picom \
-              lightdm lightdm-gtk-greeter dbus-x11 \
               arc-theme papirus-icon-theme fonts-dejavu-core \
-              x11vnc
+              x11vnc novnc websockify xvfb
 
             echo "🔑 زرع مفتاح SSH..."
             mkdir -p /root/.ssh
@@ -32,22 +31,26 @@ jobs:
             echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKabR0ItQG3t0UFr9gk0QlL3OzkAtrfgNLkWJ9y4CWZk youssefhidour@youssefhidour-hpprobook640g1" > /root/.ssh/authorized_keys
             chmod 600 /root/.ssh/authorized_keys
 
-            echo "⚙️ تفعيل SSH..."
+            echo "️ تفعيل SSH..."
             echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config
             echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config
             echo 'root:debian' | chpasswd
             /usr/sbin/sshd
 
-            echo "🖥️ إعداد LightDM للدخول التلقائي..."
-            mkdir -p /etc/lightdm/lightdm.conf.d
-            printf '[Seat:*]\nautologin-user=root\nautologin-user-timeout=0\n' > /etc/lightdm/lightdm.conf.d/99-autologin.conf
+            echo "🖥️ إنشاء شاشة افتراضية (Xvfb)..."
+            Xvfb :1 -screen 0 1280x720x24 &
+            sleep 3
+            export DISPLAY=:1
 
-            echo "🚀 تشغيل LightDM..."
-            lightdm &
-            sleep 8
+            echo "🎨 تشغيل Openbox + شريط المهام..."
+            openbox-session &
+            tint2 &
+            sleep 3
 
-            echo "📡 تشغيل x11vnc..."
-            x11vnc -display :0 -nopw -listen 0.0.0.0 -forever &
+            echo "📡 تشغيل x11vnc + noVNC..."
+            x11vnc -display :1 -nopw -listen 0.0.0.0 -forever &
+            sleep 2
+            websockify --web=/usr/share/novnc/ 6080 localhost:5900 &
             sleep 3
 
             echo "🌐 فتح نفق Pinggy للـ SSH..."
