@@ -1,27 +1,32 @@
-name: Debian Raw + SSH
+name: Debian Openbox + SSH
 
 on:
   workflow_dispatch:
 
 jobs:
-  debian_raw:
+  debian_openbox:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Debian VM (No GUI)
+      - name: Run Debian VM with Openbox
         uses: vmactions/debian-vm@v1
         with:
           mem: 4096
           cpus: 4
           debug-on-error: true
           run: |
-            echo "🔧 تثبيت الأساسيات فقط..."
+            echo "🔧 تثبيت الأساسيات + واجهة Openbox الخفيفة..."
             apt-get update -qq
-            apt-get install -y -qq openssh-server nano curl wget git build-essential
-            apt-get install -y xserver-xorg openbox lightdm lightdm-gtk-greeter tint2 pcmanfm lxappearance obconf obmenu lxterminal
+            apt-get install -y -qq \
+              openssh-server nano curl wget git build-essential \
+              xorg openbox openbox-themes obconf obmenu \
+              tint2 pcmanfm lxterminal lxappearance nitrogen picom \
+              lightdm lightdm-gtk-greeter dbus-x11 \
+              arc-theme papirus-icon-theme fonts-dejavu-core \
+              x11vnc
 
-            echo "🔑 زرع مفتاح SSH الخاص بك..."
+            echo "🔑 زرع مفتاح SSH..."
             mkdir -p /root/.ssh
             chmod 700 /root/.ssh
             echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKabR0ItQG3t0UFr9gk0QlL3OzkAtrfgNLkWJ9y4CWZk youssefhidour@youssefhidour-hpprobook640g1" > /root/.ssh/authorized_keys
@@ -33,7 +38,15 @@ jobs:
             echo 'root:debian' | chpasswd
             /usr/sbin/sshd
 
-            echo " فتح نفق Pinggy..."
-            ssh -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R0:localhost:22 tcp@free.pinggy.io
+            echo "️ إعداد LightDM للدخول التلقائي..."
+            mkdir -p /etc/lightdm/lightdm.conf.d
+            printf '[Seat:*]\nautologin-user=root\nautologin-user-timeout=0\n' > /etc/lightdm/lightdm.conf.d/99-autologin.conf
 
+            echo "🚀 تشغيل LightDM..."
+            lightdm &
+            sleep 8
+
+            echo "📡 تشغيل x11vnc (لمشاركة الشاشة)..."
+            x11vnc -display :0 -nopw -listen 0.0.0.0 -forever &
+            sleep 3
             exit 1
