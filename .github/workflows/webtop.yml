@@ -1,59 +1,78 @@
-name: Debian Openbox + SSH
+name: Debian GUI + SSH
 
 on:
   workflow_dispatch:
 
 jobs:
-  debian_openbox:
+  debian_gui:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Start Debian with Openbox + SSH + noVNC
+        run: |
+          echo " بناء وتشغيل حاوية Debian..."
+          docker run -d --name debian-gui --privileged \
+            --shm-size="2g" \
+            -p 2222:22 \
+            -p 6080:6080 \
+            debian:bookworm-slim bash -c "
+              # تثبيت كل شيء
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq
+              apt-get install -y -qq \
+                openssh-server xorg openbox openbox-themes \
+                tint2 pcmanfm lxterminal lxappearance nitrogen picom \
+                x11vnc novnc websockify xvfb \
+                nano curl wget git build-essential \
+                arc-theme papirus-icon-theme fonts-dejavu-core dbus-x11
 
-      - name: Run Debian VM with Openbox
-        uses: vmactions/debian-vm@v1
-        with:
-          mem: 4096
-          cpu: 4
-          debug-on-error: true
-          run: |
-            echo "🔧 تثبيت الأساسيات + واجهة Openbox..."
-            apt-get update -qq
-            apt-get install -y -qq \
-              openssh-server nano curl wget git build-essential \
-              xorg openbox openbox-themes obconf obmenu \
-              tint2 pcmanfm lxterminal lxappearance nitrogen picom \
-              arc-theme papirus-icon-theme fonts-dejavu-core \
-              x11vnc novnc websockify xvfb
+              # مفتاح SSH
+              mkdir -p /root/.ssh
+              chmod 700 /root/.ssh
+              echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKabR0ItQG3t0UFr9gk0QlL3OzkAtrfgNLkWJ9y4CWZk youssefhidour@youssefhidour-hpprobook640g1' > /root/.ssh/authorized_keys
+              chmod 600 /root/.ssh/authorized_keys
+              echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config
+              echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config
+              echo 'root:debian' | chpasswd
+              /usr/sbin/sshd
 
-            echo "🔑 زرع مفتاح SSH..."
-            mkdir -p /root/.ssh
-            chmod 700 /root/.ssh
-            echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKabR0ItQG3t0UFr9gk0QlL3OzkAtrfgNLkWJ9y4CWZk youssefhidour@youssefhidour-hpprobook640g1" > /root/.ssh/authorized_keys
-            chmod 600 /root/.ssh/authorized_keys
+              # شاشة افتراضية + Openbox
+              Xvfb :1 -screen 0 1280x720x24 &
+              sleep 2
+              export DISPLAY=:1
+              openbox-session &
+              tint2 &
+              sleep 2
 
-            echo "️ تفعيل SSH..."
-            echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config
-            echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config
-            echo 'root:debian' | chpasswd
-            /usr/sbin/sshd
+              # VNC + noVNC
+              x11vnc -display :1 -nopw -listen 0.0.0.0 -forever &
+              sleep 2
+              websockify --web=/usr/share/novnc/ 6080 localhost:5900 &
 
-            echo "🖥️ إنشاء شاشة افتراضية (Xvfb)..."
-            Xvfb :1 -screen 0 1280x720x24 &
-            sleep 3
-            export DISPLAY=:1
+              # إبقاء الحاوية حية
+              tail -f /dev/null
+            "
 
-            echo "🎨 تشغيل Openbox + شريط المهام..."
-            openbox-session &
-            tint2 &
-            sleep 3
+          echo " إنشاء نفق Cloudflare للواجهة الرسومية..."
+          curl -Lo cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared
+          ./cloudflared tunnel --url http://localhost:6080 > web.log 2>&1 &
+          sleep 12
+          WEB_LINK=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' web.log | head -1)
 
-            echo "📡 تشغيل x11vnc + noVNC..."
-            x11vnc -display :1 -nopw -listen 0.0.0.0 -forever &
-            sleep 2
-            websockify --web=/usr/share/novnc/ 6080 localhost:5900 &
-            sleep 3
+          echo "🔗 إنشاء نفق Cloudflare للـ SSH..."
+          ./cloudflared tunnel --url tcp://localhost:2222 > ssh.log 2>&1 &
+          sleep 12
+          SSH_LINK=$(grep -oE 'tcp://[a-z0-9-]+\.trycloudflare\.com:[0-9]+' ssh.log | head -1)
 
-            echo "🌐 فتح نفق Pinggy للـ SSH..."
-            ssh -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R0:localhost:22 tcp@free.pinggy.io
+          echo ""
+          echo "###########################################"
+          echo "🖥️ الواجهة الرسومية (افتح في المتصفح):"
+          echo "$WEB_LINK/vnc.html?autoconnect=true"
+          echo ""
+          echo " SSH:"
+          echo "$SSH_LINK"
+          echo "أو: ssh -p PORT root@HOST"
+          echo "كلمة السر: debian (أو مفتاحك)"
+          echo "###########################################"
 
-            exit 1
+          for i in $(seq 1 330); do sleep 60; done
