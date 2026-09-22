@@ -19,6 +19,7 @@ jobs:
             echo "🔧 تثبيت الأساسيات فقط..."
             apt-get update -qq
             apt-get install -y -qq openssh-server nano curl wget git build-essential
+            apt-get install -y xserver-xorg openbox lightdm lightdm-gtk-greeter tint2 pcmanfm lxappearance obconf obmenu lxterminal
 
             echo "🔑 زرع مفتاح SSH الخاص بك..."
             mkdir -p /root/.ssh
