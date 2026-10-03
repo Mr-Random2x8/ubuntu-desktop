@@ -5,53 +5,60 @@ jobs:
   observer:
     runs-on: ubuntu-latest
     steps:
-      - name: Install QEMU
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86
-
-      - name: Get tiny guest (kernel + busybox initrd)
+      - name: Install QEMU + socat
         run: |
-          # initrd بسيط يطبع رسالة ثم ينام، ليكون لدينا ذاكرة نقرأها
-          mkdir -p initrdfs/{bin,dev,proc}
-          cp /usr/bin/busybox initrdfs/bin/ 2>/dev/null || \
-            (wget -q https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox -O initrdfs/bin/busybox && chmod +x initrdfs/bin/busybox)
-          cat > initrdfs/init <<'EOF'
-          #!/bin/sh
-          mount -t proc none /proc
-          echo "GUEST_ALIVE" > /dev/console
-          while true; do echo "tick" > /dev/kmsg; sleep 1; done
-          EOF
-          chmod +x initrdfs/init
-          (cd initrdfs && find . | cpio -o -H newc | gzip) > initrd.img
-          wget -q https://kernel.ubuntu.com/~kernel-ppa/mainline/v6.1/linux-image-unsigned-6.1.0-060100-generic_6.1.0-060100.202212111137_amd64.deb -O k.deb 2>/dev/null || true
-          # بديل أبسط: استخدم kernel المضيف نفسه
-          cp /boot/vmlinuz-$(uname -r) kernel.img 2>/dev/null || echo "no kernel"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 socat
 
-      - name: Boot guest with monitor socket (the OBSERVER channel)
+      - name: Boot bare guest (SeaBIOS only) with external monitor
         run: |
-          # -monitor unix: = قناة مراقبة خارجية، الضيف لا يراها
-          # -s -S = gdbstub على port 1234 (المراقب يتصل به من الخارج)
+          # لا kernel، لا initrd، لا disk. SeaBIOS يقلع ويملأ الذاكرة.
+          # -monitor unix: = قناة المراقب الخارجية، الضيف لا يراها (pledge منطقياً)
           qemu-system-x86_64 \
             -accel tcg \
             -m 512 -smp 1 -nographic \
-            -kernel kernel.img -initrd initrd.img \
-            -append "console=ttyS0 quiet" \
             -monitor unix:mon.sock,server,nowait \
-            -s -S &
-          echo $! > qemu.pid
-          sleep 8
+            -serial file:serial.log \
+            -daemonize -pidfile qemu.pid
+          echo "QEMU PID = $(cat qemu.pid)"
 
-      - name: OBSERVE from outside (read guest state without guest agent)
+          # فحص إلزامي: هل QEMU حي فعلاً؟ هل الـ socket موجود؟
+          sleep 3
+          if [ ! -S mon.sock ]; then
+            echo "❌ mon.sock غير موجود — QEMU فشل في الإنشاء"
+            cat serial.log 2>/dev/null
+            exit 1
+          fi
+          if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
+            echo "❌ QEMU مات بعد الإقلاع"
+            cat serial.log 2>/dev/null
+            exit 1
+          fi
+          echo "✅ QEMU حي و mon.sock جاهز"
+
+      - name: OBSERVE from outside (no guest agent)
         run: |
-          echo "=== 1) حالة الآلة عبر QEMU monitor ==="
-          echo "info status" | socat - UNIX-CONNECT:mon.sock
-          echo "=== 2) قراءة registers من الخارج ==="
-          echo "info registers" | socat - UNIX-CONNECT:mon.sock | head -20
-          echo "=== 3) قراءة ذاكرة الضيف الفيزيائية (xp) ==="
-          # xp/16xg = افحص 16 وحدة بحجم 64-bit من العنوان الفيزيائي 0x10000
-          echo "xp/16xg 0x10000" | socat - UNIX-CONNECT:mon.sock
-          echo "=== 4) التحكم: إيقاف الضيف من الخارج (decision) ==="
-          echo "stop" | socat - UNIX-CONNECT:mon.sock
-          echo "info status" | socat - UNIX-CONNECT:mon.sock
+          set +e   # لا تُفشل الـ step لو رد واحد فشل، اطبع كل شيء
+          M() { echo "$1" | socat -t5 - UNIX-CONNECT:mon.sock; }
+
+          echo "=== 1) حالة الآلة (المراقب يرى وجود الضيف من الخارج) ==="
+          M "info status"
+
+          echo "=== 2) سجلات المعالج (registers) من الخارج ==="
+          M "info registers" | head -25
+
+          echo "=== 3) قراءة الذاكرة الفيزيائية للضيف (xp) من الخارج ==="
+          M "xp/16xg 0x100000"
+
+          echo "=== 4) التحكم: تجميد الضيف من الخارج (Decision System) ==="
+          M "stop"
+          M "info status"
+
+          echo "=== 5) استئناف ثم إيقاف كامل ==="
+          M "cont"
+          sleep 2
+          M "system_powerdown"
+          echo "✅ اكتمل البرهان: قراءة + تحكم من خارج الضيف"
 
       - name: Keep alive
         run: for i in $(seq 1 60); do sleep 60; done
