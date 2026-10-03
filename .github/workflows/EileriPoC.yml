@@ -12,53 +12,50 @@ jobs:
 
       - name: Boot bare guest (SeaBIOS only) with external monitor
         run: |
-          # لا kernel، لا initrd، لا disk. SeaBIOS يقلع ويملأ الذاكرة.
-          # -monitor unix: = قناة المراقب الخارجية، الضيف لا يراها (pledge منطقياً)
           qemu-system-x86_64 \
             -accel tcg \
-            -m 512 -smp 1 -nographic \
+            -m 512 -smp 1 -display none \
             -monitor unix:mon.sock,server,nowait \
             -serial file:serial.log \
             -daemonize -pidfile qemu.pid
           echo "QEMU PID = $(cat qemu.pid)"
 
-          # فحص إلزامي: هل QEMU حي فعلاً؟ هل الـ socket موجود؟
           sleep 3
           if [ ! -S mon.sock ]; then
-            echo "❌ mon.sock غير موجود — QEMU فشل في الإنشاء"
+            echo "FAIL: mon.sock not created"
             cat serial.log 2>/dev/null
             exit 1
           fi
           if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
-            echo "❌ QEMU مات بعد الإقلاع"
+            echo "FAIL: QEMU died after boot"
             cat serial.log 2>/dev/null
             exit 1
           fi
-          echo "✅ QEMU حي و mon.sock جاهز"
+          echo "OK: QEMU alive, mon.sock ready"
 
       - name: OBSERVE from outside (no guest agent)
         run: |
-          set +e   # لا تُفشل الـ step لو رد واحد فشل، اطبع كل شيء
+          set +e
           M() { echo "$1" | socat -t5 - UNIX-CONNECT:mon.sock; }
 
-          echo "=== 1) حالة الآلة (المراقب يرى وجود الضيف من الخارج) ==="
+          echo "=== 1) VM status (observer sees guest existence) ==="
           M "info status"
 
-          echo "=== 2) سجلات المعالج (registers) من الخارج ==="
+          echo "=== 2) CPU registers from outside ==="
           M "info registers" | head -25
 
-          echo "=== 3) قراءة الذاكرة الفيزيائية للضيف (xp) من الخارج ==="
+          echo "=== 3) guest physical memory read (xp) from outside ==="
           M "xp/16xg 0x100000"
 
-          echo "=== 4) التحكم: تجميد الضيف من الخارج (Decision System) ==="
+          echo "=== 4) control: freeze guest from outside (Decision System) ==="
           M "stop"
           M "info status"
 
-          echo "=== 5) استئناف ثم إيقاف كامل ==="
+          echo "=== 5) resume then powerdown ==="
           M "cont"
           sleep 2
           M "system_powerdown"
-          echo "✅ اكتمل البرهان: قراءة + تحكم من خارج الضيف"
+          echo "OK: proof complete - read + control from outside guest"
 
       - name: Keep alive
         run: for i in $(seq 1 60); do sleep 60; done
