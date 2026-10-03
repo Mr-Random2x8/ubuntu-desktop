@@ -1,61 +1,112 @@
-name: Eileri PoC - External Observer
+name: Eileri Two-System PoC
 on:
   workflow_dispatch:
 jobs:
-  observer:
+  two_systems:
     runs-on: ubuntu-latest
     steps:
-      - name: Install QEMU + socat
+      - name: Tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq qemu-system-x86 socat
+          sudo apt-get install -y -qq qemu-system-x86 socat file
 
-      - name: Boot bare guest (SeaBIOS only) with external monitor
+      - name: Build guest (real Linux, no internet kernel needed)
         run: |
-          qemu-system-x86_64 \
-            -accel tcg \
-            -m 512 -smp 1 -display none \
+          set -e
+          # kernel: خذ أي vmlinuz موجود في المضيف (لا اعتماد على uname)
+          KERN=$(ls /boot/vmlinuz-* 2>/dev/null | head -1)
+          [ -n "$KERN" ] || { echo "FAIL: no kernel in /boot"; ls -la /boot; exit 1; }
+          cp "$KERN" kernel.img
+          echo "kernel = $KERN"
+
+          # busybox static (musl) = ضيف Linux كامل بملف واحد، بلا libs
+          curl -fL --retry 3 -o busybox \
+            "https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox"
+          [ -s busybox ] || { echo "FAIL: empty busybox"; exit 1; }
+          chmod +x busybox
+          file busybox
+
+          # بناء initrd
+          rm -rf rootfs && mkdir -p rootfs/bin rootfs/dev rootfs/proc rootfs/sys
+          cp busybox rootfs/bin/busybox
+          for c in sh ls cat echo sleep ps mount uname id pwd cd rm mkdir df free date hostname; do
+            ln -sf busybox rootfs/bin/"$c"
+          done
+          cat > rootfs/init <<'INIT'
+          #!/bin/sh
+          mount -t proc none /proc 2>/dev/null
+          mount -t sysfs none /sys 2>/dev/null
+          echo "=== GUEST OS READY (busybox Linux) ==="
+          while true; do
+            printf 'GUEST# '
+            IFS= read -r line || break
+            [ -z "$line" ] && continue
+            echo "[guest-exec] $line"
+            eval "$line" 2>&1
+          done
+          INIT
+          chmod +x rootfs/init
+          ( cd rootfs && find . -print0 | cpio --null -o -H newc 2>/dev/null | gzip -9 ) > ../initrd.img
+          ls -lh ../initrd.img
+
+      - name: Boot GUEST + open external monitor
+        run: |
+          set -e
+          # -chardev pty = طرفية الضيف، المضيف يقرأ/يكتب فيها من الخارج
+          # -monitor unix = قناة المراقب (Eileri Protection)، الضيف لا يراها
+          qemu-system-x86_64 -accel tcg -m 512 -smp 1 -display none \
+            -kernel kernel.img -initrd initrd.img \
+            -append "console=ttyS0" \
+            -chardev pty,id=ser0 -serial chardev:ser0 \
             -monitor unix:mon.sock,server,nowait \
-            -serial file:serial.log \
-            -daemonize -pidfile qemu.pid
-          echo "QEMU PID = $(cat qemu.pid)"
+            -daemonize -pidfile qemu.pid 2>qemu.err
+          sleep 4
+          PTY=$(grep -oE '/dev/pts/[0-9]+' qemu.err | head -1)
+          [ -n "$PTY" ] || { echo "FAIL: no pty"; cat qemu.err; exit 1; }
+          [ -S mon.sock ] || { echo "FAIL: no monitor socket"; exit 1; }
+          echo "GUEST PTY = $PTY"
+          echo "$PTY" > pty.path
+          # قارئ خلفي يجمع كل ما يطبعه الضيف
+          ( cat "$PTY" >> guest.log 2>/dev/null ) &
+          echo $! > reader.pid
+          # انتظار إقلاع الضيف (TCG بطيء)
+          for i in $(seq 1 40); do
+            grep -q 'GUEST OS READY' guest.log 2>/dev/null && { echo "guest up after ${i}s"; break; }
+            sleep 1
+          done
+          cat guest.log
 
-          sleep 3
-          if [ ! -S mon.sock ]; then
-            echo "FAIL: mon.sock not created"
-            cat serial.log 2>/dev/null
-            exit 1
-          fi
-          if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
-            echo "FAIL: QEMU died after boot"
-            cat serial.log 2>/dev/null
-            exit 1
-          fi
-          echo "OK: QEMU alive, mon.sock ready"
+      - name: WRITE commands into BOTH systems
+        run: |
+          set +e
+          PTY=$(cat pty.path)
+          send() { printf '%s\n' "$1" > "$PTY"; sleep 2; }
 
-      - name: OBSERVE from outside (no guest agent)
+          echo "########## [HOST] observer side ##########"
+          uname -a
+          echo "host uptime: $(uptime)"
+          echo "host sees guest exists:"
+          echo "info status" | socat -t5 - UNIX-CONNECT:mon.sock
+
+          echo "########## [GUEST] write real commands into it ##########"
+          send "uname -a"
+          send "ls /"
+          send "ps"
+          send "echo hello-from-host-into-guest"
+          send "date"
+          sleep 2
+          echo "--- guest transcript ---"
+          cat guest.log
+
+      - name: OBSERVER reads + controls guest from OUTSIDE
         run: |
           set +e
           M() { echo "$1" | socat -t5 - UNIX-CONNECT:mon.sock; }
-
-          echo "=== 1) VM status (observer sees guest existence) ==="
-          M "info status"
-
-          echo "=== 2) CPU registers from outside ==="
-          M "info registers" | head -25
-
-          echo "=== 3) guest physical memory read (xp) from outside ==="
-          M "xp/16xg 0x100000"
-
-          echo "=== 4) control: freeze guest from outside (Decision System) ==="
-          M "stop"
-          M "info status"
-
-          echo "=== 5) resume then powerdown ==="
-          M "cont"
-          sleep 2
-          M "system_powerdown"
-          echo "OK: proof complete - read + control from outside guest"
-
-      - name: Keep alive
-        run: for i in $(seq 1 60); do sleep 60; done
+          echo "===== Eileri core: no guest agent, pure external view ====="
+          echo "-- registers --"; M "info registers" | head -12
+          echo "-- physical mem --"; M "xp/8xg 0x100000"
+          echo "-- freeze guest (Decision System) --"; M "stop"; M "info status"
+          echo "-- resume --"; M "cont"
+          echo "-- close --"; M "quit"
+          kill "$(cat reader.pid)" 2>/dev/null
+          echo "DONE"
