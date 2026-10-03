@@ -13,13 +13,14 @@ jobs:
       - name: Build guest (real Linux, no internet kernel needed)
         run: |
           set -e
-          # kernel: خذ أي vmlinuz موجود في المضيف (لا اعتماد على uname)
+          # kernel المضيف: نسخه بـ sudo لأن /boot/vmlinuz-* مقيد القراءة لـ runner
           KERN=$(ls /boot/vmlinuz-* 2>/dev/null | head -1)
           [ -n "$KERN" ] || { echo "FAIL: no kernel in /boot"; ls -la /boot; exit 1; }
-          cp "$KERN" kernel.img
-          echo "kernel = $KERN"
+          sudo cp "$KERN" kernel.img
+          sudo chmod 644 kernel.img          # ليقرأه QEMU (يعمل كـ runner) لاحقا
+          echo "kernel = $KERN ($(stat -c%s kernel.img) bytes)"
 
-          # busybox static (musl) = ضيف Linux كامل بملف واحد، بلا libs
+          # busybox static = ضيف Linux كامل بملف واحد، بلا libs
           curl -fL --retry 3 -o busybox \
             "https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox"
           [ -s busybox ] || { echo "FAIL: empty busybox"; exit 1; }
@@ -52,8 +53,6 @@ jobs:
       - name: Boot GUEST + open external monitor
         run: |
           set -e
-          # -chardev pty = طرفية الضيف، المضيف يقرأ/يكتب فيها من الخارج
-          # -monitor unix = قناة المراقب (Eileri Protection)، الضيف لا يراها
           qemu-system-x86_64 -accel tcg -m 512 -smp 1 -display none \
             -kernel kernel.img -initrd initrd.img \
             -append "console=ttyS0" \
@@ -66,10 +65,8 @@ jobs:
           [ -S mon.sock ] || { echo "FAIL: no monitor socket"; exit 1; }
           echo "GUEST PTY = $PTY"
           echo "$PTY" > pty.path
-          # قارئ خلفي يجمع كل ما يطبعه الضيف
           ( cat "$PTY" >> guest.log 2>/dev/null ) &
           echo $! > reader.pid
-          # انتظار إقلاع الضيف (TCG بطيء)
           for i in $(seq 1 40); do
             grep -q 'GUEST OS READY' guest.log 2>/dev/null && { echo "guest up after ${i}s"; break; }
             sleep 1
