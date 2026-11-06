@@ -1,43 +1,68 @@
-name: Run Android
+name: Android GUI Control
 on:
   workflow_dispatch:
 jobs:
-  android:
+  android_vnc:
     runs-on: ubuntu-latest
     steps:
-      - name: Enable KVM permissions
+      - name: Install tools
         run: |
-          # بدون هذه الخطوة يفشل emulator بـ permission denied على /dev/kvm [[51]]
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          ls -l /dev/kvm
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            qemu-kvm libvirt-clients bridge iptables \
+            xvfb x11vnc novnc websockify unzip curl wget
 
-      - name: Run Android emulator
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 34
-          arch: x86_64
-          disable-animations: true
-          script: |
-            echo "===== Android is alive ====="
-            adb devices
-            echo "--- version ---"
-            adb shell getprop ro.build.version.release
-            adb shell getprop ro.product.model
-            echo "--- installed packages ---"
-            adb shell pm list packages | head -20
-            echo "===== write commands INTO android ====="
-            adb shell "echo hello-from-github > /sdcard/test.txt"
-            adb shell "cat /sdcard/test.txt"
-            adb shell "ls -la /sdcard"
-            echo "===== capture screen ====="
-            adb exec-out screencap -p > screen.png
-            ls -lh screen.png
+      - name: Install Android SDK + emulator
+        run: |
+          set -e
+          export ANDROID_HOME="$HOME/android-sdk"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          cd "$ANDROID_HOME/cmdline-tools"
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O t.zip
+          unzip -q t.zip && mv cmdline-tools latest && rm t.zip
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platform-tools" "emulator" "system-images;android-33;google_apis;x86_64" >/dev/null
+          avdmanager create avd -n a -k "system-images;android-33;google_apis;x86_64" -d pixel_6 --force
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "PATH=$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH" >> $GITHUB_ENV
 
-      - name: Upload screenshot
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-screen
-          path: screen.png
+      - name: Boot emulator on Xvfb + VNC
+        run: |
+          set -e
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1024x768x24 -nolisten tcp &
+          sleep 3
+          # emulator يعرض نافذته على Xvfb (software GPU)
+          emulator -avd a -no-snapshot -no-boot-anim -wipe-data \
+            -gpu swiftshader_indirect -no-audio -no-window &
+          echo "waiting for device..."
+          adb wait-for-device
+          for i in $(seq 1 120); do
+            b=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            [ "$b" = "1" ] && { echo "booted after ${i}s"; break; }
+            sleep 5
+          done
+          adb shell input tap 512 384   # إيقاظ الشاشة
+          # بث الشاشة عبر VNC بكلمة سر
+          x11vnc -display :99 -rfbport 5900 -passwd eileri123 -forever -shared -bg -o /tmp/vnc.log
+          sleep 2
+          websockify --web=/usr/share/novnc 6080 localhost:5900 &
+          sleep 3
+          echo "vnc+novnc up"
+
+      - name: Public tunnel + link
+        run: |
+          curl -sLo cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared
+          ./cloudflared tunnel --url http://localhost:6080 > t.log 2>&1 &
+          sleep 12
+          LINK=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' t.log | head -1)
+          echo ""
+          echo "###########################################"
+          echo "🔗 رابط التحكم الرسمي بأندرويد:"
+          echo "$LINK/vnc.html?autoconnect=true&resize=scale"
+          echo "🔑 كلمة سر VNC: eileri123"
+          echo "###########################################"
+          echo "الرابط يبقى حياً 4 ساعات. أبقِ التبويب مفتوحاً وتحكم."
+          for i in $(seq 1 240); do sleep 60; done
